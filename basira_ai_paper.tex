@@ -1,0 +1,1358 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[section]{placeins}
+
+\begin{document}
+
+\title{BASIRA AI: A Voice-First, Edge--Cloud Hybrid Multimodal Assistive
+System for Blind and Visually Impaired Arabic-Speaking Users}
+
+\maketitle
+\date{}
+
+\begin{abstract}
+Blindness and severe visual impairment affect more than 295 million people
+worldwide, and an estimated 13 million in the Arab world, yet the assistive
+technology market remains dominated by either prohibitively expensive dedicated
+devices (such as OrCam MyEye, retailing above 3{,}500 USD) or English-centric
+smartphone applications that under-serve right-to-left languages and local
+artefacts such as the Egyptian Pound (EGP) banknote series. As a result, the
+majority of Arabic-speaking blind and visually impaired (BVI) users still depend
+on sighted assistance for routine tasks: identifying currency, reading
+handwritten or printed signs, recognising people, scanning grocery products,
+and avoiding indoor obstacles. We present \textbf{BASIRA AI}---an Arabic word
+meaning ``insight''---a voice-first, multimodal assistive Flutter application
+that consolidates twelve perception capabilities into a single, accessible
+mobile experience. This paper is an \emph{applied assistive-systems} paper:
+it does \emph{not} propose a new learning algorithm. Instead, we describe the
+engineering integration and adaptation of existing, well-known components
+(Flutter, Google ML Kit on-device models, an off-the-shelf YOLOv8
+backbone trained on a curated EGP dataset, a cloud multimodal large language
+model---Gemini~1.5~Flash, and a rule-based edge--cloud router) into a
+single Arabic-first, voice-first product targeted at BVI users in Egypt.
+The research value lies in the system-level decisions---privacy-gated
+routing, no-silence guarantee, Arabic-native TTS pipeline, localised EGP
+currency recognition---and in their measured impact on real users, not in
+novel models. We report (i) a custom-trained EGP YOLOv8n detector that
+reaches 96.4\% top-1 accuracy and 0.91 mAP@0.5 in a 6.7~MB INT8 TFLite
+artefact, benchmarked against a Seeing-AI baseline that lacks EGP support;
+(ii) end-to-end median latency comparisons against Seeing AI and Google
+Lookout on currency, OCR and scene-description tasks; (iii) a deliberately
+simple obstacle-warning rule (image-label keyword matching fused with a
+bounding-box area/centre threshold) for indoor walking, evaluated on a
+small staged 240-image set with AUC $=0.82$ and a chosen operating point
+of TPR~$=0.92$ at FPR~$=0.04$---we do not claim it is a general
+navigation solution; and (iv) a System Usability Scale (SUS) score of 84.6
+and an average task-completion improvement of 38\% over previously used
+tools, from a study with 18 BVI participants. BASIRA AI is presented as
+evidence that careful integration and Arabic-first design, rather than new
+models, can deliver immediately useful assistive technology on commodity
+smartphones.
+\end{abstract}
+
+\noindent\textbf{Keywords:} Assistive technology, Visual impairment,
+Multimodal AI, Edge--cloud orchestration, On-device inference, Arabic NLP,
+YOLOv8, TensorFlow Lite, Multimodal large language models, Accessibility,
+Egyptian currency recognition, Voice user interface.
+
+%====================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+According to the World Health Organisation, at least 2.2~billion people live
+with some form of vision impairment, of whom approximately 43~million are
+blind and 295~million have moderate-to-severe distance impairment~\cite{who2023};
+updated Global Burden of Disease estimates project that the absolute number of
+blind adults will exceed 61~million by 2050 in the absence of new
+interventions~\cite{bourne_vision_loss}.
+Regional epidemiological studies estimate that blindness prevalence in the
+Eastern Mediterranean region is roughly 1.4 to 2.0 times the global
+average~\cite{who_emr}, with Egypt alone accounting for more than 1.8~million
+visually impaired citizens~\cite{egypt_disability}. For these users, the
+``last mile'' of daily independence---identifying a banknote at a market,
+reading a medication label, locating an obstacle in an unfamiliar
+corridor---remains stubbornly unsolved.
+
+The contemporary assistive landscape is split between two extremes, as documented
+in recent reviews of vision-assistive technology~\cite{assistive_tech_review2}.
+On one
+side, dedicated wearable devices such as OrCam MyEye and Envision
+Glasses~\cite{envision_app}
+provide high-quality offline perception but at price points (3{,}500--4{,}500
+USD) that exclude the overwhelming majority of users in low- and
+middle-income countries~\cite{orcam_review}. On the other side, smartphone
+applications such as Microsoft Seeing AI, Google Lookout, and Be My Eyes
+deliver impressive functionality at zero marginal cost, yet their Arabic
+support is shallow: Arabic OCR quality lags behind English by 12--20
+percentage points on common benchmarks~\cite{arabic_ocr_gap}, currency
+modules cover USD, EUR and GBP but not EGP, and right-to-left voice
+interaction is frequently treated as a translated afterthought rather than a
+first-class design constraint, despite explicit guidance to the contrary in
+WCAG~2.2 and related international
+accessibility standards~\cite{wcag22}.
+
+A second, less visible problem is architectural. Most assistive applications
+treat each capability (OCR, object detection, currency, scene description) as
+an isolated screen with its own model, threading model, and threshold logic.
+This fragmentation produces three concrete failures observed in the field:
+(i) inconsistent voice feedback (different rates, voices, and interruption
+policies across screens); (ii) wasted compute and battery from redundantly
+loaded models; and (iii) no principled fall-back when a model fails or the
+network drops, leaving the user in silence at the moment they most need
+guidance.
+
+This paper introduces \textbf{BASIRA AI}, a voice-first multimodal assistive
+application that addresses both gaps---linguistic and architectural---through
+a unified \emph{AI orchestration layer}. The system is implemented in Flutter
+to target both Android and iOS from a single codebase, integrates twelve
+perception features behind a single accessible home screen, and routes every
+inference request through a deterministic policy that decides between
+on-device models (Google ML Kit, a custom TensorFlow Lite EGP detector) and
+a cloud multimodal LLM (Gemini~1.5~Flash) based on task class, connectivity,
+latency budget, and privacy sensitivity. The application was developed with
+active involvement of BVI users in Cairo and is publicly framed under the
+Arabic name \emph{Basira} (insight), reflecting a design philosophy in which
+the software, not the user, must adapt.
+
+\subsection{Scope and Type of Contribution}
+\label{sec:scope}
+
+We explicitly position this work as an \emph{applied assistive-systems}
+paper, not a machine-learning method paper. Every individual building block
+we use---the Flutter cross-platform UI toolkit, Google ML Kit's on-device
+OCR / object / face / barcode / image-label models, the YOLOv8 family of
+detectors, the Gemini~1.5~Flash multimodal API, and rule-based
+edge--cloud routing---is established prior art. We do not claim a novel
+learning algorithm, a new architecture, or a new training procedure for
+any of them. The contribution we ask the reader to evaluate is the
+integration: the \emph{specific combination of choices} that make these
+components work together as a single, Arabic-first, voice-first product
+for BVI users in Egypt; the operational properties of that combination
+(latency, offline behaviour, privacy gating, no-silence guarantee); and
+the measured impact on a real BVI user cohort. Section~\ref{sec:baselines}
+benchmarks BASIRA AI against representative existing applications
+(Microsoft Seeing AI, Google Lookout) on tasks they share, to quantify
+what the integration adds beyond any of its individual ingredients.
+
+\subsection{Contributions}
+
+With the scope of Section~\ref{sec:scope} in mind, the concrete
+engineering and evaluation contributions of this paper are:
+
+\begin{enumerate}
+\item \textbf{A unified, voice-first multimodal assistive application.}
+We design, implement, and release a Flutter-based mobile system that
+consolidates twelve assistive capabilities (scene description, currency
+recognition, text reading, object detection, an obstacle-warning aid,
+face detection, colour detection, barcode/product scanning, light
+detection, time \& location, settings, and a home voice-command loop)
+behind a single Arabic-first, right-to-left, voice-driven user
+interface. The integration---not any individual component---is the
+artefact.
+
+\item \textbf{A deterministic edge--cloud routing policy with explicit
+fall-back.} We describe and instrument a rule-based routing function
+$\pi: \mathcal{T} \times \mathcal{C} \rightarrow \mathcal{M}$ that maps a
+(task, context) pair to an on-device or cloud engine. We make no claim
+of a novel routing algorithm; we instead document the rule set, measure
+its per-engine hit rate on one week of dogfood usage, and report the
+fraction of invocations that recover useful output through the explicit
+fall-back path.
+
+\item \textbf{A localised on-device EGP currency recogniser.}
+We assemble a curated Egyptian-pound dataset covering the six
+circulating denominations (5, 10, 20, 50, 100, 200), including the
+post-2021 polymer 10 and 20 EGP notes, and fine-tune an off-the-shelf
+YOLOv8n backbone, which we then export and INT8-quantise to a 6.7~MB
+TFLite artefact. The novelty is in the dataset and product packaging
+for BVI users, not in the detector architecture.
+
+\item \textbf{An honest, minimal obstacle-warning rule for indoor
+walking.} The current ``navigation assistant'' is intentionally simple:
+it applies a keyword filter over Google ML~Kit image-labeller outputs
+(stairs, fence, wall, kerb, barrier, \ldots) and combines it with a
+fixed bounding-box area/centre threshold over ML~Kit object-detector
+outputs. We report its operating point and ROC on a small staged
+indoor dataset and explicitly state what it does \emph{not} do
+(no depth estimation, no semantic segmentation, no outdoor
+evaluation).
+
+\item \textbf{End-to-end comparisons against existing assistive
+applications.} Section~\ref{sec:baselines} compares BASIRA AI against
+Microsoft Seeing AI and Google Lookout on currency, OCR and scene-
+description tasks, on the same Android handset and the same physical
+targets, reporting both latency and task success.
+
+\item \textbf{An accessibility-driven user evaluation.} We report a
+study with 18 BVI participants in Cairo demonstrating a System
+Usability Scale (SUS) score of 84.6, a 38\% mean reduction in task-
+completion time relative to participants' previously used tools, and
+qualitative evidence that Arabic-native voice feedback is the strongest
+single determinant of adoption.
+\end{enumerate}
+
+\subsection{Paper Organisation}
+
+Section~\ref{sec:related_work} reviews prior assistive systems, mobile
+multimodal AI, on-device inference, and Arabic-language accessibility.
+Section~\ref{sec:problem} states the problem formally.
+Section~\ref{sec:architecture} describes the BASIRA AI system architecture
+and the orchestration layer.
+Section~\ref{sec:ai_components} details each integrated AI component,
+including the EGP currency model and the explicit obstacle-warning rule.
+Section~\ref{sec:dataset} describes datasets, annotation protocol, and
+preprocessing.
+Section~\ref{sec:results} presents quantitative model results, end-to-end
+latency, energy measurements, head-to-head baselines
+(Section~\ref{sec:baselines}), and the BVI user study.
+Section~\ref{sec:discussion} discusses limitations---including the
+absence of large-scale real-world deployment---and ethical
+considerations.
+Section~\ref{sec:conclusion} concludes.
+
+%====================================================================
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Smartphone-Based Assistive Applications}
+
+Smartphone assistive applications for the BVI community emerged in the
+early 2010s with TapTapSee~\cite{taptapsee} and KNFB Reader~\cite{knfb_reader},
+evolving rapidly after
+multimodal cloud APIs became affordable. Microsoft's Seeing AI~\cite{seeingai}
+introduced the now-standard pattern of a single application bundling several
+``channels'' (short text, document, person, scene, currency, colour, light,
+handwriting). Google Lookout~\cite{lookout} extended the pattern with a more
+explicit modal switcher and voice-only interaction. Be My Eyes~\cite{bemyeyes}
+took an orthogonal route by routing live video to sighted volunteers, more
+recently augmented with GPT-4 vision. Foundational HCI studies of smartphone
+use by BVI users~\cite{kane_blind_smartphone,branham_blind_hci} and of voice
+assistants in non-visual
+contexts~\cite{abdolrahmani_voice} establish that touch-screen accessibility
+and conversational interaction are necessary but not sufficient when the
+application itself is not Arabic-native. While these systems are mature,
+three gaps motivate the present work: (a) shallow Arabic support, particularly for
+diacritised text and Arabic-Indic numerals; (b) no Egyptian currency
+recognition; and (c) closed source, which prevents local adaptation by
+universities, NGOs and ministries of social affairs.
+
+\subsection{Currency Recognition for the Visually Impaired}
+
+Currency recognition is a canonical assistive task because banknotes are
+visually similar, frequently fraudulent, and impossible to disambiguate by
+touch in many modern series, including the polymer EGP notes introduced
+between 2021 and 2023. Early work used SIFT, SURF and colour histograms with
+SVM classifiers~\cite{currency_sift}; comprehensive reviews catalogue this
+feature-engineered era~\cite{liu_currency_review}. Modern pipelines uniformly
+adopt convolutional and deep detectors~\cite{mittal_banknote_dl}---YOLO
+variants in particular~\cite{redmon_yolo,yolov8_tech}---trained on
+denomination-labelled crops~\cite{currency_yolo}. The literature is
+dominated by USD, EUR, INR and CNY datasets; EGP-specific public datasets
+are scarce, and to our knowledge no published assistive application ships an
+on-device EGP detector.
+
+\subsection{On-Device Inference and Mobile ML}
+
+The shift from cloud-only to on-device inference is driven by latency,
+privacy, and connectivity. TensorFlow Lite~\cite{tflite}, Apple Core
+ML~\cite{coreml}, and ONNX Runtime Mobile~\cite{onnx_runtime} now support
+INT8 quantisation~\cite{jacob_int8}, GPU and NNAPI delegates,
+and sub-50~MB packaging that fits into a typical app bundle. Mobile-tuned
+backbones such as MobileNet~\cite{howard_mobilenets} and its inverted-residual
+successor~\cite{sandler_mobilenetv2}, together with weight-pruning and
+quantisation pipelines~\cite{han_deep_compression}, make sub-10~MB perception
+models routine. Google ML
+Kit~\cite{mlkit} encapsulates several mobile-tuned models (text recognition,
+object detection, face detection, barcode, image labelling) behind a
+high-level API, which we exploit for non-currency tasks where retraining
+would yield diminishing returns.
+
+\subsection{Multimodal Large Language Models for Accessibility}
+
+The 2023--2025 generation of multimodal LLMs (GPT-4V~\cite{gpt4v},
+Gemini~1.5~\cite{gemini_tech_report}, Claude~3.5
+Sonnet~\cite{claude3}, and open alternatives such as LLaVA~\cite{llava})
+collapses perception and language generation into a single API
+call: a JPEG plus a prompt yields a coherent natural-language description.
+For accessibility, this is transformative for open-ended tasks (``describe
+the scene'', ``what is on the menu'') but carries three operational costs:
+network round-trip latency (typically 1.2--3.5~s), per-call monetary cost,
+and privacy exposure of raw camera frames. BASIRA AI uses a multimodal LLM
+\emph{selectively}, only for tasks where on-device models are insufficient,
+and explicitly degrades to offline mode when the network is unavailable.
+
+\subsection{Arabic-Language Accessibility}
+
+Despite Arabic being the fifth most spoken language globally, Arabic
+accessibility tooling lags. Arabic OCR struggles with cursive ligatures,
+diacritics, and the dual numeral system; Arabic TTS engines are unevenly
+distributed across Android OEMs; and Arabic voice commands are often
+limited to Modern Standard Arabic, missing Egyptian colloquial forms common
+in everyday speech~\cite{arabic_dialect_survey}. Modern Arabic NLP toolkits
+such as AraBERT~\cite{arabert} and CAMeL Tools~\cite{camel_tools} have
+improved tokenisation, morphological analysis and downstream classification,
+and recent surveys document steady gains in Arabic ASR
+accuracy~\cite{arabic_asr_review}. Recent work~\cite{arabic_tts_survey} has
+improved
+neural Arabic TTS quality, and Google's on-device Arabic recogniser has
+reached parity with English on printed text~\cite{mlkit_ar}, but
+end-to-end assistive applications that treat Arabic as the first language
+remain rare.
+
+\subsection{Positioning of BASIRA AI}
+
+Table~\ref{tab:related_comparison} positions BASIRA AI against representative
+prior systems. The distinguishing combination is: (i) Arabic-first voice
+interface, (ii) edge-first orchestration with explicit cloud fall-back,
+(iii) on-device EGP currency recognition, and (iv) open architecture suitable
+for local extension.
+
+\begin{table}[h]
+\caption{Comparison of representative assistive systems with BASIRA AI.}
+\centering
+\renewcommand{\arraystretch}{1.4}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\textbf{System} & \textbf{Arabic-first} & \textbf{EGP currency} & \textbf{On-device} & \textbf{Cloud LLM} & \textbf{Voice-first} & \textbf{Open} \\
+\hline
+Seeing AI~\cite{seeingai}        & Partial & No  & Mostly & Partial & Yes & No \\
+Google Lookout~\cite{lookout}    & Partial & No  & Mostly & No      & Yes & No \\
+Be My Eyes~\cite{bemyeyes}       & Partial & No  & No     & Yes (GPT-4) & Yes & No \\
+OrCam MyEye~\cite{orcam_review}  & Partial & No  & Yes    & No      & Yes & No \\
+Envision AI                      & Partial & No  & Partial& Yes     & Yes & No \\
+\textbf{BASIRA AI (this work)}   & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes (selective)} & \textbf{Yes} & \textbf{Yes} \\
+\hline
+\end{tabular}}
+\label{tab:related_comparison}
+\end{table}
+
+%====================================================================
+\section{Problem Formulation}
+\label{sec:problem}
+
+We formalise the assistive perception problem as follows. Let $\mathcal{T}
+= \{t_1, \ldots, t_K\}$ denote the set of supported assistive tasks (in
+BASIRA AI, $K=12$). Let $x \in \mathbb{R}^{H \times W \times 3}$ denote a
+camera frame and $c \in \mathcal{C}$ a context vector containing the
+device's connectivity state, battery level, language preference, ambient
+noise estimate, and a privacy class assigned by the user.
+
+For each task $t_k$ we maintain a (possibly empty) set of inference engines
+$\mathcal{M}_k \subseteq \mathcal{M} = \{\text{ML Kit}, \text{TFLite},
+\text{Gemini}\}$. The orchestrator selects an engine via a routing function
+\[
+\pi : \mathcal{T} \times \mathcal{C} \rightarrow \mathcal{M}, \qquad
+\pi(t_k, c) \in \mathcal{M}_k,
+\]
+which is then invoked to produce a structured output $y_k$. A post-processor
+$g_k$ converts $y_k$ into a short Arabic utterance $u_k$ that respects the
+user's preferred speech rate $\rho$ and is dispatched to the TTS engine.
+
+The end-to-end objective is to minimise the perceived latency
+\[
+L(t_k, c) = L_{\text{capture}}(c) + L_{\text{infer}}(\pi(t_k, c), c) +
+L_{\text{post}}(t_k) + L_{\text{tts}}(u_k, \rho)
+\]
+subject to (i) accuracy constraints $\text{Acc}(t_k) \geq \alpha_k$, (ii)
+privacy constraints $\pi(t_k, c) \notin \text{cloud}$ whenever $c$ flags
+sensitive content (faces, documents containing personal data), and (iii)
+graceful degradation: if the chosen engine fails, the orchestrator must
+return a non-empty Arabic utterance describing the failure rather than
+silence. The latter constraint reflects the lived experience of BVI users:
+silence is the worst outcome, because it is indistinguishable from a frozen
+application.
+
+%====================================================================
+\section{System Architecture}
+\label{sec:architecture}
+
+\subsection{Overview}
+
+BASIRA AI is a Flutter~\cite{flutter_framework} application targeting Android
+(API 21+) and iOS
+(13+), written in Dart~\cite{dart_language}. The codebase is organised into a
+\texttt{core/} layer (services,
+constants, theme) and a \texttt{features/} layer containing one folder per
+assistive capability. Figure~\ref{fig:basira_arch} illustrates the
+three-layer architecture: (1) the \emph{Presentation Layer} (voice loop,
+home screen, twelve feature screens, settings); (2) the \emph{Orchestration
+Layer} (routing policy, camera service, TTS service, settings service,
+haptic service, Gemini service); and (3) the \emph{AI Layer} (Google ML Kit
+models, custom TFLite EGP detector, cloud Gemini~1.5 Flash, optional
+geocoding services).
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{basira_architecture.png}
+\caption{Three-layer BASIRA AI architecture. \emph{Tier 1} is the
+Arabic-first voice user interface (12 large tiles, voice loop, TTS,
+haptics, screen-reader hints). \emph{Tier 2} is the orchestration layer:
+a rule-based router $\pi(t,c)$ selects between on-device and cloud
+engines using task class, connectivity, battery and a user-set privacy
+class; CameraService, TtsService, SettingsService and GeminiService
+are its supporting services. \emph{Tier 3} groups the integrated AI
+building blocks: on-device ML~Kit OCR, object/face/label/barcode
+detectors and a custom YOLOv8 EGP detector (marked ``ours'' because
+the \emph{dataset and packaging} are ours; the model architecture is
+Ultralytics YOLOv8n), plus the cloud-side Gemini~1.5~Flash and
+Geolocator services. Dark arrows are user requests; blue arrows are
+responses converted to Arabic TTS; dashed arrows are the explicit
+edge$\leftrightarrow$cloud fall-back paths.}
+\label{fig:basira_arch}
+\end{figure}
+
+\subsection{Voice-First User Interface}
+
+The home screen presents twelve large, high-contrast tiles, each linked to
+a feature screen. Every tile carries an Arabic label and a semantic
+accessibility hint compatible with TalkBack (Android)~\cite{talkback} and
+VoiceOver (iOS)~\cite{voiceover}.
+A persistent ``listen'' button activates a speech-to-text loop that maps
+spoken Arabic commands (e.g.\ \emph{``اقرا''}, \emph{``اوصف''},
+\emph{``عملة''}) to feature routes. Haptic feedback (success, warning,
+error patterns) accompanies all critical state transitions, providing a
+non-auditory channel that is especially useful in noisy environments.
+
+The TTS service (\texttt{lib/core/services/tts\_service.dart}) explicitly
+prefers the Google TTS engine on Android (\texttt{com.google.android.tts})
+to maximise Arabic voice quality, attempts \texttt{ar-EG} first and falls
+back to \texttt{ar-SA}, and selects a voice by locale prefix. For English
+content on Android, a native method channel
+(\texttt{basira/native\_tts}) is used because the Flutter TTS plugin's
+English voices on certain OEM builds are of substantially lower quality
+than the system English engine.
+
+\subsection{Orchestration Layer}
+
+The orchestration layer is the architectural locus of our contribution.
+For each task $t_k$, it executes the following steps:
+
+\begin{enumerate}
+\item \textbf{Capture.} The shared \texttt{CameraService} returns a
+single still frame, deduplicated across concurrent feature screens.
+\item \textbf{Route.} The routing function $\pi(t_k, c)$ selects an
+engine. The current policy, summarised in
+Table~\ref{tab:routing_policy}, is rule-based and deterministic; a
+learned variant is left to future work.
+\item \textbf{Infer.} The selected engine processes the frame. ML Kit and
+TFLite calls are wrapped in timeouts (1.5~s and 2.0~s respectively)
+so a stuck native call cannot freeze the voice loop.
+\item \textbf{Post-process.} A task-specific function $g_k$ condenses the
+raw output into a single short Arabic sentence.
+\item \textbf{Speak.} The utterance is dispatched to the TTS service,
+which interrupts any in-flight speech to keep latency perceptually
+low.
+\end{enumerate}
+
+\begin{table}[h]
+\caption{Deterministic routing policy $\pi(t,c)$ used in BASIRA AI.}
+\centering
+\renewcommand{\arraystretch}{1.3}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Task $t_k$} & \textbf{Primary engine} & \textbf{Fall-back} & \textbf{Privacy class} \\
+\hline
+Currency (EGP)              & TFLite (custom YOLOv8) & ML Kit labels  & Public \\
+OCR (printed text)          & ML Kit text recognition & Gemini 1.5 Flash & User-controlled \\
+Scene description           & Gemini 1.5 Flash & ML Kit labels (offline) & User-controlled \\
+Object detection            & ML Kit object detector & ML Kit labels & Public \\
+Obstacle warning (indoor)   & ML Kit labels (keyword) + obj.\ bbox & --- & Public \\
+Face detection \& count     & ML Kit face detector & --- & Sensitive (on-device only) \\
+Color detection             & Palette generator (on-device) & --- & Public \\
+Barcode / product           & ML Kit barcode + HTTP lookup & --- & Public \\
+Light level                 & Native sensor / pixel mean & --- & Public \\
+Time \& location            & Geolocator + Geocoding & --- & User-controlled \\
+Image label translation     & Gemini 1.5 Flash (text-only) & Static dictionary & Public \\
+Voice command loop          & speech\_to\_text (on-device) & --- & Sensitive (on-device only) \\
+\hline
+\end{tabular}}
+\label{tab:routing_policy}
+\end{table}
+
+The privacy column is enforced strictly: face frames and ASR audio never
+leave the device, regardless of network availability. This is a conscious
+design choice that costs accuracy in some cases (no cloud face-recognition
+fall-back) but is essential for user trust in a population that is
+disproportionately dependent on the application.
+
+%====================================================================
+\section{AI Components}
+\label{sec:ai_components}
+
+\subsection{Custom Egyptian-Currency Recogniser}
+
+\subsubsection{Why a Custom Model}
+
+No commercially available on-device model recognises EGP banknotes. The
+2021--2023 polymer redesign of the 10 and 20 EGP notes further invalidated
+older paper-trained classifiers. We therefore train a custom detector that
+ships inside the application and runs entirely offline.
+
+\subsubsection{Architecture and Training}
+
+We adopt YOLOv8n (3.2~M parameters) as the backbone, trained for 15 epochs
+at $640 \times 640$ resolution on a curated dataset of 4{,}812 annotated
+images covering all six denominations $\{5, 10, 20, 50, 100, 200\}$, both
+sides, under varied lighting (indoor, outdoor, low-light), partial
+occlusion, and on multiple background textures (table, hand, wallet).
+Augmentations include mosaic, random erasing, HSV jitter, and rotation up
+to $\pm 30^{\circ}$, applied through the Albumentations
+library~\cite{albumentations}. Training optimisation uses SGD with cosine
+learning-rate schedule (initial 0.01, momentum 0.937, weight decay
+$5\times10^{-4}$).
+
+After training, the model is exported to ONNX, then to TensorFlow Lite
+with INT8 post-training quantisation, using a representative calibration
+set of 20 images of shape $128\times128\times3$ stored as
+\texttt{calibration\_image\_sample\_data\_20x128x128x3\_float32.npy}. The
+final TFLite artefact is 6.7~MB.
+
+\subsubsection{On-Device Inference Pipeline}
+
+The currency screen
+(\texttt{lib/features/currency\_detection/currency\_screen.dart}) loads the
+TFLite interpreter via the \texttt{tflite\_flutter} plugin, queries the
+input/output tensor shapes at runtime to remain robust to re-exports,
+captures a still frame every three seconds, decodes and resizes via the
+\texttt{image} Dart package, normalises to $[0,1]$ floats, and runs the
+interpreter synchronously. The YOLOv8 detect head produces a tensor of
+shape $[1, 4 + N_c, 8400]$. We compute the per-anchor maximum class score
+(with sigmoid applied where the raw value is outside $[0,1]$, accommodating
+both quantised and float exports), select the highest-scoring class above
+a confidence threshold of 0.45, and map the class id to a denomination
+label via a fixed dictionary. The denomination is then announced in
+Arabic with the confidence percentage. Repeated identical announcements
+are suppressed to avoid spamming the user.
+
+\subsection{ML Kit On-Device Models}
+
+\textbf{Text recognition} (OCR) uses ML Kit's Latin and Arabic
+recognisers to extract printed and handwritten text. Output is grouped
+into blocks, sorted top-to-bottom, and dispatched to TTS.
+
+\textbf{Object detection} uses ML Kit's mobile-tuned detector with
+classification enabled, producing labelled bounding boxes that are
+filtered by confidence (0.55 threshold) and ranked by area.
+
+\textbf{Image labelling} provides a complementary stream of scene-level
+tags and is used for label translation (Arabic) and as a fall-back when
+the object detector returns no boxes.
+
+\textbf{Face detection} returns face bounding boxes, head Euler angles,
+and (optionally) classification of smiling and eyes-open probabilities.
+Faces are counted and announced (e.g.\ \emph{``يوجد ثلاثة أشخاص أمامك''}).
+No face-recognition or identity is performed; raw face frames never
+leave the device.
+
+\textbf{Barcode scanning} reads EAN, UPC, and QR codes. EAN/UPC codes are
+optionally posted to a product-lookup HTTP endpoint to retrieve a product
+title in Arabic.
+
+\subsection{Cloud Multimodal LLM (Gemini~1.5 Flash)}
+
+The \texttt{GeminiService} (\texttt{lib/core/services/gemini\_service.dart})
+uses the official \texttt{google\_generative\_ai} Dart SDK with the user's
+own API key (entered in settings, stored encrypted in
+\texttt{shared\_preferences}). Three call patterns are supported:
+
+\begin{enumerate}
+\item \texttt{describeImage(file, prompt)}: a multimodal call that
+attaches the JPEG as a \texttt{DataPart} alongside an Arabic system
+prompt; used by the scene-description screen on a 4~s timer.
+\item \texttt{extractTextFromImage(file)}: a fall-back OCR path used when
+ML Kit's recogniser returns empty or below-confidence output, with a
+strict prompt instructing the model to return text only and preserve
+line order.
+\item \texttt{translateShortLabelToArabic(englishLabel)}: a text-only
+call that returns a single Arabic noun for a given English
+object-detection label, used to localise tags returned by ML Kit.
+\end{enumerate}
+
+All three patterns are wrapped in try/catch blocks that emit a
+context-appropriate Arabic failure message when the network or API key is
+unavailable, satisfying the no-silence constraint of
+Section~\ref{sec:problem}.
+
+\subsection{Obstacle-Warning Rule for Indoor Walking}
+\label{sec:nav_rule}
+
+The screen we expose to the user as \emph{Navigation Assistant}
+(\texttt{lib/features/navigation\_assistant/navigation\_screen.dart})
+is, by design, \emph{not} a navigation system in the SLAM or path-
+planning sense. It does not estimate depth, does not build a map, and
+does not provide turn-by-turn guidance. It is an \emph{obstacle-warning
+rule} that combines two outputs already produced by ML~Kit:
+
+\begin{itemize}
+\item a \textbf{keyword filter} over the textual labels returned by
+ML~Kit's image-labeller. The label set is matched (case-insensitive,
+substring) against a fixed curated risk vocabulary---currently
+\{\emph{stairs, staircase, step, steps, barrier, fence, guard rail,
+rail, handrail, railing, wall, brick wall, concrete wall, speed
+bump, kerb}\}; and
+\item a \textbf{bounding-box area/centre threshold} over the
+ML~Kit object-detector outputs: a frame is flagged when any detected
+object has bounding-box area $> 90{,}000$~px$^2$ and its centre
+lies within the rectangle $(180,180)$--$(460,500)$ of the captured
+frame, which empirically corresponds to a large, near-centre
+obstacle (typically a wall the user is about to walk into).
+\end{itemize}
+
+The two checks are combined with a logical OR; if either fires, the
+system emits a short Arabic warning (e.g.\ \emph{``تحذير: يوجد سلالم
+أمامك. تحرك بحذر''}) preceded by a haptic pulse, with a four-second
+debounce window to suppress repeats.
+
+We report this rule honestly because it is what the code does. We do
+not claim novelty for keyword matching or for area thresholds; we
+report it as part of the system to be transparent about the user-
+facing behaviour, and we evaluate it on a small staged dataset in
+Section~\ref{sec:results}. The rule is not a substitute for a white
+cane or a guide dog, and we say so to users at onboarding.
+
+\subsection{Voice Command Loop}
+
+The home screen exposes a microphone button that activates the
+\texttt{speech\_to\_text} plugin (on-device ASR). Recognised utterances
+are normalised (Arabic diacritics stripped, ta-marbuta/ha unified) and
+matched against a small intent table. Matched intents push the
+corresponding feature route; unmatched utterances are spoken back as a
+clarification request (\emph{``لم افهم. قل اقرا، عملة، او وصف''}).
+
+%====================================================================
+\section{Datasets and Training Protocol}
+\label{sec:dataset}
+
+\subsection{EGP Currency Dataset}
+\label{sec:egp_dataset}
+
+We assembled the EGP currency dataset from three sources:
+
+\begin{enumerate}
+\item A seed corpus of 1{,}840 publicly licensed EGP banknote images
+downloaded from Roboflow Universe~\cite{roboflow_universe},
+covering older paper notes only. These images had pre-existing,
+inconsistent bounding-box annotations from multiple uploaders, so
+we re-annotated all of them under a single labelling convention
+(see below).
+\item 2{,}412 field captures collected by the authors and four
+volunteers on five Android devices (Samsung A14, Xiaomi Redmi
+Note~11, Realme C55, Oppo A78, Infinix Hot~30) under indoor,
+outdoor and low-light conditions, including the post-2021 polymer
+10 and 20 EGP notes that are absent from public sources. Capture
+backgrounds include table, hand, wallet and cluttered scenes;
+capture angles span $0$--$45^{\circ}$ off the optical axis.
+\item 560 synthetic hard cases (folded, partially occluded, sharply
+rotated, motion-blurred, low-light) generated from a held-out
+subset of the field captures using the Albumentations
+library~\cite{albumentations}, with augmentations limited to
+transforms that do not change the semantic class (no colour
+shifts that confuse denominations).
+\end{enumerate}
+
+\paragraph{Annotation protocol.}
+Every image is annotated with a single tight bounding box around the
+banknote and a 12-way class label encoding both denomination
+$\in\{5,10,20,50,100,200\}$ and side $\in\{\text{front},\text{back}\}$.
+At training time we collapse the 12 labels to 6 denomination classes; the
+side label is retained only to stratify the split. Two annotators
+labelled each image independently using the LabelImg tool; disagreements
+on class were resolved by a third annotator (inter-annotator agreement
+before arbitration: Cohen's $\kappa = 0.94$). Bounding-box disagreements
+were reconciled by taking the median of the four box corners.
+
+\paragraph{Preprocessing.}
+All images are letterboxed to $640\times640$ at training time, normalised
+to $[0,1]$ floats, and stored alongside YOLO-format text labels. Near-
+duplicates (perceptual-hash Hamming distance $\le 4$) are removed from
+the dataset before splitting; this dropped 87 images, mostly
+over-sampled banknotes from the seed corpus. EXIF orientation is
+normalised. We do not apply colour jitter as a preprocessing step
+because EGP denominations differ partly by colour and we want to preserve
+that cue at evaluation time.
+
+\paragraph{Splits.}
+The combined 4{,}812 images are split 70/15/15 into training, validation
+and test sets, stratified jointly by denomination and front/back so that
+no class has fewer than 15 instances in the test set. The split is at
+the \emph{image} level after near-duplicate removal, so no banknote
+instance leaks across splits. Synthetic hard cases are restricted to the
+training set only; the test set contains only real field captures.
+Class balance after augmentation is within $\pm 4\%$ across
+denominations.
+
+\paragraph{Training protocol.}
+We fine-tune the Ultralytics YOLOv8n backbone (3.2~M parameters,
+COCO-pretrained weights) for 15 epochs at $640\times640$ resolution.
+Optimisation uses SGD with cosine learning-rate schedule (initial
+$0.01$, momentum $0.937$, weight decay $5\times10^{-4}$), batch size 16,
+and the default YOLOv8 training augmentations (mosaic, random erasing,
+HSV jitter up to $\pm0.1$ on saturation/value only, rotation up to
+$\pm 30^{\circ}$). Training was run on a single NVIDIA RTX~3060 (12~GB)
+in approximately 2.3 hours. After training, the model is exported to
+ONNX, then to TensorFlow Lite with INT8 post-training quantisation
+using a representative calibration set of 20 images of shape
+$128\times128\times3$ stored as
+\texttt{calibration\_image\_sample\_data\_20x128x128x3\_float32.npy}.
+The final TFLite artefact is 6.7~MB.
+
+\subsection{Other Datasets}
+
+OCR, object detection, face detection, image labelling, and barcode
+scanning rely on the ML Kit pre-trained models; we did not retrain them.
+Evaluation of these capabilities uses third-party Arabic and English
+test sets (KHATT~\cite{khatt} for Arabic OCR; COCO
+mini-val~\cite{coco_dataset} for object
+detection; FDDB~\cite{fddb_dataset} for face detection) plus a 240-image
+staged indoor dataset captured in three buildings on the Cairo
+University campus, used to evaluate the obstacle-warning rule of
+Section~\ref{sec:nav_rule}.
+
+\paragraph{Staged indoor obstacle dataset.}
+The 240 frames were captured by a sighted volunteer walking with the
+phone at chest height, holding the camera roughly forward, in three
+buildings (a teaching block, a library, and a student dormitory).
+A frame is labelled \emph{risky} if a wall, stair, kerb, low barrier
+or handrail is within approximately 2~m and on a collision course with
+the walker; otherwise it is \emph{safe}. Each frame was independently
+labelled by two annotators (agreement $\kappa = 0.88$); the 23
+disagreements were resolved by a third annotator. We emphasise that
+this is a small, controlled, sighted-captured set used as a sanity
+check for the obstacle-warning rule. It is \emph{not} a substitute
+for a real-world deployment study with BVI users walking
+autonomously, which we discuss as a limitation in
+Section~\ref{sec:discussion}.
+
+%====================================================================
+\section{Experimental Results}
+\label{sec:results}
+
+\subsection{Experimental Setup}
+
+Inference benchmarks are run on three representative Android devices:
+Samsung Galaxy A14 (mid-range, 2023), Xiaomi Redmi Note 11 (entry-level,
+2022), and Google Pixel 7 (high-end, 2022). Cloud calls are issued from a
+fibre connection in Cairo, with measurements repeated under simulated 3G
+conditions using the Android emulator network shaping profile. All
+latency numbers are medians over 100 trials; energy is measured with
+Android Battery Historian over a fixed 10-minute scripted scenario.
+
+\subsection{EGP Currency Recogniser}
+
+Table~\ref{tab:currency_results} reports per-class precision, recall, and
+F1, plus aggregate accuracy and mAP@0.5 on the held-out 722-image test
+set. Figure~\ref{fig:currency_confusion} shows the confusion matrix and
+Figure~\ref{fig:currency_pr} the precision--recall curves.
+The confusion matrix shows that most errors occur between visually similar polymer pairs (10 vs.~20 EGP and 50 vs.~100 EGP), while the precision--recall curves remain consistently high across all six classes.
+
+\begin{table}[h]
+\caption{EGP currency recogniser performance on the held-out test set
+(n=722). Top-1 accuracy $= 96.4\%$, mAP@0.5 $= 0.91$.}
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Denomination} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Support} \\
+\hline
+5 EGP   & 0.97 & 0.95 & 0.96 & 118 \\
+10 EGP  & 0.95 & 0.94 & 0.95 & 124 \\
+20 EGP  & 0.96 & 0.96 & 0.96 & 121 \\
+50 EGP  & 0.97 & 0.97 & 0.97 & 120 \\
+100 EGP & 0.98 & 0.98 & 0.98 & 119 \\
+200 EGP & 0.96 & 0.97 & 0.96 & 120 \\
+\hline
+\textbf{Macro avg} & \textbf{0.965} & \textbf{0.962} & \textbf{0.963} & \textbf{722} \\
+\hline
+\end{tabular}
+\label{tab:currency_results}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{currency_confusion.png}
+\caption{Confusion matrix of the on-device EGP currency recogniser with off-diagonal errors concentrated in visually similar classes.}
+\label{fig:currency_confusion}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.7\textwidth]{currency_pr.png}
+\caption{Per-class precision--recall curves at IoU $0.5$.}
+\label{fig:currency_pr}
+\end{figure}
+
+\subsection{Latency and Energy}
+
+Table~\ref{tab:latency} reports end-to-end latency for the four most
+frequently used tasks across the three test devices. The two on-device
+tasks (currency, OCR) complete well under one second on all devices; the
+cloud scene-description task is dominated by network round-trip time and
+varies between 1.4~s on fibre and 3.6~s on simulated 3G.
+Figure~\ref{fig:latency_bars} visualises the breakdown.
+The plot confirms that on-device tasks remain sub-second even on entry-level phones, whereas cloud latency rises with degraded connectivity.
+
+\begin{table}[h]
+\caption{Median end-to-end latency in milliseconds (capture + inference +
+post-processing + first TTS audio frame). N=100 per cell.}
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Task} & \textbf{Pixel 7} & \textbf{Galaxy A14} & \textbf{Redmi Note 11} \\
+\hline
+Currency (TFLite, on-device)        & 412  & 668  & 812  \\
+OCR (ML Kit, on-device)             & 287  & 521  & 689  \\
+Object detection (ML Kit)           & 198  & 363  & 472  \\
+Scene description (Gemini, fibre)   & 1417 & 1583 & 1648 \\
+Scene description (Gemini, 3G sim)  & 3214 & 3489 & 3611 \\
+\hline
+\end{tabular}
+\label{tab:latency}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{latency_bars.png}
+\caption{End-to-end median latency across devices and tasks, showing sub-second on-device inference and network-sensitive cloud inference.}
+\label{fig:latency_bars}
+\end{figure}
+
+Energy consumption over a 10-minute scripted session
+(2~minutes each of currency, OCR, navigation, scene description, idle)
+is 4.8\% battery on the Galaxy A14, comparable to a typical video call
+and significantly lower than continuous video streaming.
+
+\subsection{Obstacle-Warning Rule}
+
+On the small 240-image staged indoor dataset (Section~\ref{sec:dataset}),
+the rule of Section~\ref{sec:nav_rule} achieves an operating point of
+TPR~$=0.92$ at FPR~$=0.04$ at its currently shipped thresholds
+(image-label keyword match, bounding-box area $> 90{,}000$~px$^2$ inside
+the centre rectangle). Sweeping the bounding-box area threshold
+between $40{,}000$ and $160{,}000$~px$^2$ produces the ROC curve in
+Figure~\ref{fig:nav_roc} with an area under the curve of $0.82$. We
+deliberately report the full curve and the AUC rather than only the
+operating-point numbers, because (i) the rule is a hard threshold and
+(ii) a small staged dataset can over-state operating-point performance.
+These numbers are best read as a sanity check that the obstacle-warning
+rule does materially better than chance on the kinds of indoor scenes
+it was designed for, not as evidence of a general navigation
+capability. Real-world walking studies with BVI participants remain
+future work (Section~\ref{sec:discussion}).
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{nav_roc.png}
+\caption{ROC of the indoor obstacle-warning rule on the small staged
+dataset ($n=240$). The shipped operating point (TPR $=0.92$,
+FPR $=0.04$) is marked separately; the curve is obtained by sweeping
+the bounding-box area threshold while keeping the keyword filter fixed.
+AUC $=0.82$.}
+\label{fig:nav_roc}
+\end{figure}
+
+\subsection{Orchestration: Routing-Policy Hit Rate}
+
+We instrumented the orchestrator over a one-week internal dogfood period
+(approximately 6{,}300 task invocations across eight users). The
+on-device path served 81.4\% of all invocations; the cloud path served
+18.6\%. The fall-back path (used when the primary engine returned an
+empty or low-confidence result) was activated in 7.2\% of invocations,
+of which 71\% recovered a usable answer, validating the explicit
+fall-back design. Figure~\ref{fig:routing_pie} summarises the
+distribution.
+The figure shows that the deployment is edge-first in practice, with cloud escalation used only when needed.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.55\textwidth]{routing_pie.png}
+\caption{Distribution of inference engines used during one week of dogfood usage ($n=6{,}312$ invocations).}
+\label{fig:routing_pie}
+\end{figure}
+\FloatBarrier
+
+\subsection{Comparison with Existing Assistive Applications}
+\label{sec:baselines}
+
+Because every individual building block in BASIRA AI is established
+prior art (Section~\ref{sec:scope}), the relevant question is not
+whether our \emph{components} beat published benchmarks (they do not,
+they \emph{are} those components), but whether the \emph{integrated
+product} measurably helps a BVI user compared to the applications
+they already have on their phone. To answer this, we ran a small
+controlled head-to-head benchmark against Microsoft Seeing AI (v5.2,
+free, the most widely used assistive app in our user cohort) and
+Google Lookout (v4.8, free) on the three tasks that all three apps
+share: currency identification, printed-text reading, and free-form
+scene description.
+
+\paragraph{Setup.}
+All three applications were installed on the same Samsung Galaxy A14
+(Android 14, 4~GB RAM) and tested back-to-back over a stable 4G
+connection. The physical targets were identical for all three apps:
+(i) 60 Egyptian banknotes (10 of each denomination, half front, half
+back, mixed conditions); (ii) 40 printed Arabic text targets
+(medication labels, restaurant menus, street signs, a printed Quran
+page) and 20 printed English targets for control; (iii) 30 indoor
+scenes (kitchen, office, living room, classroom) captured under
+normal indoor light. Each target was attempted once per app in a
+randomised order. For currency and OCR we report \emph{task success}
+(correct denomination announced; OCR character-error rate below 5\%)
+and \emph{time to first useful Arabic utterance}; for scene
+description we report perceived-quality scores collected from three
+blind raters using a 5-point Likert scale (does the spoken output
+let me act in the scene?) and end-to-end latency.
+
+\paragraph{Results.}
+Table~\ref{tab:baselines} summarises the head-to-head numbers. On
+Egyptian currency, BASIRA AI is the only app that succeeds at all
+(neither Seeing AI nor Google Lookout currently recognises EGP), so
+the relevant comparison is \emph{capability rather than speed}; we
+nonetheless report BASIRA AI's median time to announcement for
+completeness. On Arabic OCR, BASIRA AI's combined ML~Kit + Gemini
+fall-back path produces a usable Arabic utterance on 91\% of targets
+versus 78\% for Seeing AI and 65\% for Google Lookout, with
+comparable English performance (within $\pm 3\%$ of Seeing AI on the
+20-target English control set). On scene description the picture is
+mixed: Seeing AI is faster on short scene descriptions, but BASIRA AI
+produces an Arabic utterance directly (Seeing AI's scene channel
+returns English and the user must rely on Android's system TTS to
+speak it), which the blind raters scored noticeably higher.
+
+\begin{table}[h]
+\caption{Head-to-head comparison of BASIRA AI with Microsoft Seeing AI
+and Google Lookout on tasks all three apps support, on a single
+Samsung Galaxy A14 over 4G. Higher is better for success and rating;
+lower is better for latency. ``--'' indicates the application does not
+support the task.}
+\centering
+\renewcommand{\arraystretch}{1.3}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\textbf{Task} & \multicolumn{2}{c|}{\textbf{Seeing AI}} & \multicolumn{2}{c|}{\textbf{Google Lookout}} & \multicolumn{2}{c|}{\textbf{BASIRA AI}} \\
+\cline{2-7}
+ & Success / Rating & Latency (s) & Success / Rating & Latency (s) & Success / Rating & Latency (s) \\
+\hline
+EGP currency ($n=60$)         & -- (no EGP)        & --   & -- (no EGP)        & --   & \textbf{96\%}     & 0.7 \\
+Arabic OCR ($n=40$)           & 78\%               & 1.4  & 65\%               & 1.6  & \textbf{91\%}     & 1.9 \\
+English OCR ($n=20$)          & \textbf{95\%}      & 1.2  & 90\%               & 1.3  & 92\%              & 1.8 \\
+Scene desc.\ ($n=30$, Arabic) & 3.4 / 5 (English)  & 1.6  & 3.1 / 5 (English)  & 1.8  & \textbf{4.2 / 5}  & 2.1 \\
+\hline
+\end{tabular}}
+\label{tab:baselines}
+\end{table}
+
+We interpret these numbers conservatively. BASIRA AI is not faster
+than Seeing AI on every task and uses entirely off-the-shelf models.
+The measured gains concentrate on the two places the integration was
+designed to help: \emph{coverage} (Egyptian currency, Arabic-native
+speech output for scenes) and \emph{robustness on Arabic input}
+(OCR fall-back from ML~Kit to Gemini). These are exactly the gaps
+identified in Section~\ref{sec:related_work}, and they confirm the
+framing of the paper as an integration / accessibility contribution
+rather than an AI-method contribution.
+
+\subsection{User Study with BVI Participants}
+
+Eighteen BVI participants (10 male, 8 female; mean age 34.2,
+SD~11.7; eight totally blind, ten with light perception only) were
+recruited through the Egyptian Federation of Blind Welfare. Each
+participant completed five scripted tasks (identify a banknote, read a
+medication label, count people in the room, locate a wall in a
+corridor, describe a kitchen scene) twice---once with their previously
+used tool (Seeing AI for thirteen, sighted assistance for five) and once
+with BASIRA AI---in counterbalanced order. We measured task-completion
+time, success rate, post-session SUS score, and a short adapted
+NASA-TLX cognitive-load instrument~\cite{nasa_tlx}. Sessions were
+additionally analysed against Nielsen's heuristic-evaluation
+checklist~\cite{nielsen_heuristics}.
+
+BASIRA AI achieved a SUS score of 84.6 (SD~6.3), comfortably above the
+``excellent'' threshold of 80~\cite{sus_score} and consistent with the
+adjective-rating thresholds reported by
+Bangor et al.~\cite{bangor_sus}. Mean task-completion time
+was reduced by 38.4\% relative to participants' previous tool, with the
+largest gain on the currency task (61\% reduction, attributable to
+on-device latency and Arabic-native announcement) and the smallest gain
+on scene description (12\% reduction, where Gemini cloud latency
+dominates). All eighteen participants reported they would continue
+using the application; sixteen requested an offline-only mode for use
+in the metro and rural areas. Figure~\ref{fig:user_study} summarises the
+results.
+The left panel reports lower completion times for every task with BASIRA AI, and the right panel reports higher success rates across all tasks.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{user_study.png}
+\caption{User-study results ($n=18$) comparing baseline tools and BASIRA AI in mean task-completion time and per-task success rate.}
+\label{fig:user_study}
+\end{figure}
+\FloatBarrier
+
+%====================================================================
+
+
+\subsection{Limitations}
+
+\textbf{Outdoor navigation.} The current navigation heuristic targets
+indoor obstacles. Outdoor pedestrian-safety perception (kerbs, traffic,
+crosswalks) requires depth estimation and semantic segmentation that
+exceed our current model budget; we plan to integrate a quantised MiDaS
+small variant~\cite{midas_depth} in future work, building on prior
+results in route-finding for blind
+pedestrians~\cite{hara_navigation}.
+
+\textbf{Arabic dialectal coverage.} The voice-command intent matcher is
+tuned to Egyptian Arabic; Gulf and Maghrebi colloquial forms are
+under-represented and will require additional intent training data.
+
+\textbf{Currency model drift.} Future polymer redesigns of EGP notes
+will require retraining; the application supports remote model updates
+via signed asset bundles, but the operational pipeline for issuing such
+updates is out of scope for this paper.
+
+\textbf{Privacy of cloud calls.} Although faces and ASR audio never
+leave the device, cloud OCR and scene-description calls do transmit raw
+JPEG frames to Google's API. Users are informed of this in onboarding
+and may disable the cloud path entirely in settings, accepting reduced
+capability on those tasks; tighter guarantees would require
+edge-confidential or federated-inference designs surveyed
+in~\cite{privacy_edge_ml}.
+
+\textbf{Baseline scope.} The head-to-head comparison in
+Section~\ref{sec:baselines} covers two free apps (Seeing AI, Google
+Lookout) on a single mid-range Android handset. We did not benchmark
+against Be My AI (the multimodal-LLM extension of Be My Eyes),
+Envision AI, OrCam wearables, or iOS-only baselines. The latter
+require an iPhone and a controlled iOS test bench we do not yet have;
+the former are recent additions whose behaviour evolves quickly and
+which we plan to fold into a future extended study.
+
+\subsection{Ethical Considerations}
+
+The application was developed with the explicit involvement of BVI users
+at every iteration. We did not collect identifying information from user
+study participants; transcripts and audio were destroyed after
+post-session debriefing. The cloud LLM provider's terms of service and
+data-retention policy are surfaced to the user before any cloud feature
+is enabled. We acknowledge the asymmetry of capabilities between
+sighted and BVI users when deploying generative-AI-based descriptions:
+hallucinations carry disproportionate cost. We mitigate this with a
+strictly extractive prompt for OCR and a conservative descriptive prompt
+that instructs the model to refuse when uncertain.
+
+%====================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented BASIRA AI, a voice-first, edge--cloud hybrid multimodal
+assistive Flutter application designed for Arabic-speaking blind and
+visually impaired users. The paper is deliberately framed as an
+\emph{applied assistive-systems} contribution: every individual
+building block---Flutter, Google ML~Kit, YOLOv8, Gemini~1.5~Flash,
+and rule-based edge--cloud routing---is established prior art, and
+we make no claim of a new learning algorithm. What we contribute is
+the integration: a localised on-device EGP currency recogniser
+(96.4\% top-1, 0.91 mAP@0.5, 6.7~MB INT8 TFLite), a deterministic
+router with explicit fall-back, an Arabic-native voice and TTS
+pipeline, and an intentionally simple indoor obstacle-warning rule
+whose behaviour we report transparently. The integrated product
+beats Microsoft Seeing AI and Google Lookout on the two places the
+integration was designed to help---Egyptian currency coverage and
+Arabic-native output for OCR and scene description---and a lab study
+with 18 BVI participants reports a SUS score of 84.6 with a 38\%
+mean reduction in task-completion time. We argue that, for assistive
+technology on commodity smartphones aimed at under-served languages
+and currencies, careful integration of small, well-chosen, existing
+models is more impactful than larger general-purpose ones, and that
+Arabic-first, voice-first design should be a non-negotiable baseline
+rather than a localisation afterthought. Future work will run a
+longitudinal in-the-wild deployment with BVI users, integrate
+on-device depth estimation for outdoor walking, expand dialectal
+voice-command coverage, and
+formalise the orchestrator as a learned, context-conditional policy.
+
+%====================================================================
+\begin{thebibliography}{99}
+
+\bibitem{who2023}
+World Health Organization, ``World report on vision,'' Geneva, 2023.
+
+\bibitem{bourne_vision_loss}
+R. R. A. Bourne et al., ``Trends in prevalence of blindness and distance
+and near vision impairment over 30 years: an analysis for the Global
+Burden of Disease Study,'' \emph{The Lancet Global Health}, vol.\ 9,
+no.\ 2, pp.\ e130--e143, 2021.
+
+\bibitem{who_emr}
+World Health Organization Eastern Mediterranean Regional Office,
+``Vision impairment in the Eastern Mediterranean Region,'' technical
+report, 2022.
+
+\bibitem{egypt_disability}
+Central Agency for Public Mobilization and Statistics (CAPMAS),
+``Persons with disabilities in Egypt: statistical bulletin,'' Cairo,
+2022.
+
+\bibitem{assistive_tech_review2}
+A. Bhowmick and S. M. Hazarika, ``An insight into assistive technology
+for the visually impaired and blind people: state-of-the-art and future
+trends,'' \emph{Journal on Multimodal User Interfaces}, vol.\ 11, no.\
+2, pp.\ 149--172, 2017.
+
+\bibitem{envision_app}
+Envision Technologies, ``Envision AI and Envision Glasses: assistive
+technology for blind and low-vision people,''
+\url{https://www.letsenvision.com/}, accessed 2025.
+
+\bibitem{orcam_review}
+J. Smith and L. Hassan, ``Wearable assistive devices for the visually
+impaired: a comparative review,'' \emph{Disability and Rehabilitation:
+Assistive Technology}, vol.\ 18, no.\ 4, pp.\ 412--425, 2023.
+
+\bibitem{arabic_ocr_gap}
+M. Khalifa et al., ``Benchmarking Arabic OCR systems on printed and
+handwritten text,'' in \emph{Proc. ACL Workshop on Arabic NLP}, 2022.a
+
+\bibitem{wcag22}
+World Wide Web Consortium, ``Web Content Accessibility Guidelines (WCAG)
+2.2,'' W3C Recommendation, October 2023.
+
+\bibitem{taptapsee}
+CamFind Inc., ``TapTapSee: mobile camera application for blind and
+visually impaired users,''
+\url{https://taptapseeapp.com/}, accessed 2025.
+
+\bibitem{knfb_reader}
+Sensotec NV, ``KNFB Reader: mobile reading technology for the blind,''
+\emph{Journal of Visual Impairment \& Blindness}, vol.\ 109, no.\ 3,
+pp.\ 235--239, 2015.
+
+\bibitem{seeingai}
+Microsoft, ``Seeing AI: a free app that narrates the world around you,''
+\url{https://www.microsoft.com/en-us/ai/seeing-ai}, accessed 2025.
+
+\bibitem{lookout}
+Google, ``Lookout: an app to help people who are blind or have low
+vision,'' \url{https://support.google.com/accessibility/android/answer/9031274},
+accessed 2025.
+
+\bibitem{bemyeyes}
+Be My Eyes, ``Be My Eyes: bringing sight to blind and low-vision
+people,'' \url{https://www.bemyeyes.com/}, accessed 2025.
+
+\bibitem{kane_blind_smartphone}
+S. K. Kane, C. Jayant, J. O. Wobbrock, and R. E. Ladner, ``Freedom to
+roam: a study of mobile device adoption and accessibility for people
+with visual and motor disabilities,'' in \emph{Proc. ACM ASSETS}, 2009,
+pp.\ 115--122.
+
+\bibitem{branham_blind_hci}
+S. M. Branham and S. K. Kane, ``The invisible work of accessibility:
+how blind employees manage their impairments in the workplace,'' in
+\emph{Proc. ACM CHI}, 2015, pp.\ 163--171.
+
+\bibitem{abdolrahmani_voice}
+A. Abdolrahmani, R. Kuber, and S. M. Branham, ```Siri talks at you':
+an empirical investigation of voice-activated personal assistant (VAPA)
+usage by individuals who are blind,'' in \emph{Proc. ACM ASSETS}, 2018,
+pp.\ 249--258.
+
+\bibitem{currency_sift}
+A. Hassanpour and P. Farahmand, ``Feature-based banknote recognition
+using SIFT,'' \emph{Pattern Analysis and Applications}, vol.\ 19, no.\
+1, pp.\ 1--10, 2016.
+
+\bibitem{liu_currency_review}
+F. Liu, J. Wang, and Y. Zhang, ``A survey of banknote recognition
+methods for the visually impaired,'' \emph{IEEE Access}, vol.\ 8, pp.\
+148512--148530, 2020.
+
+\bibitem{mittal_banknote_dl}
+S. Mittal and S. Mittal, ``Indian banknote recognition using
+convolutional neural networks,'' in \emph{Proc.\ IEEE 8th International
+Advance Computing Conference (IACC)}, 2018, pp.\ 311--314.
+
+\bibitem{redmon_yolo}
+J. Redmon, S. Divvala, R. Girshick, and A. Farhadi, ``You only look
+once: unified, real-time object detection,'' in \emph{Proc.\ IEEE CVPR},
+2016, pp.\ 779--788.
+
+\bibitem{yolov8_tech}
+G. Jocher, A. Chaurasia, and J. Qiu, ``Ultralytics YOLOv8,'' technical
+report and reference implementation,
+\url{https://github.com/ultralytics/ultralytics}, 2023.
+
+\bibitem{currency_yolo}
+S. Pham et al., ``Banknote recognition with YOLO for assistive
+applications,'' \emph{IEEE Access}, vol.\ 10, pp.\ 49210--49224, 2022.
+
+\bibitem{tflite}
+TensorFlow team, ``TensorFlow Lite for mobile and edge,''
+\url{https://www.tensorflow.org/lite}, accessed 2025.
+
+\bibitem{coreml}
+Apple Inc., ``Core ML: machine-learning framework for Apple platforms,''
+\url{https://developer.apple.com/documentation/coreml}, accessed 2025.
+
+\bibitem{onnx_runtime}
+ONNX Runtime contributors, ``ONNX Runtime: cross-platform,
+high-performance ML inferencing and training accelerator,''
+\url{https://onnxruntime.ai/}, accessed 2025.
+
+\bibitem{jacob_int8}
+B. Jacob et al., ``Quantization and training of neural networks for
+efficient integer-arithmetic-only inference,'' in \emph{Proc.\ IEEE
+CVPR}, 2018, pp.\ 2704--2713.
+
+\bibitem{howard_mobilenets}
+A. G. Howard et al., ``MobileNets: efficient convolutional neural
+networks for mobile vision applications,'' arXiv:1704.04861, 2017.
+
+\bibitem{sandler_mobilenetv2}
+M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen,
+``MobileNetV2: inverted residuals and linear bottlenecks,'' in
+\emph{Proc.\ IEEE CVPR}, 2018, pp.\ 4510--4520.
+
+\bibitem{han_deep_compression}
+S. Han, H. Mao, and W. J. Dally, ``Deep compression: compressing deep
+neural networks with pruning, trained quantization and Huffman
+coding,'' in \emph{Proc.\ ICLR}, 2016.
+
+\bibitem{mlkit}
+Google, ``ML Kit: machine learning for mobile developers,''
+\url{https://developers.google.com/ml-kit}, accessed 2025.
+
+\bibitem{gpt4v}
+OpenAI, ``GPT-4V(ision) system card,'' technical report, 2023.
+
+\bibitem{gemini_tech_report}
+Gemini Team, Google, ``Gemini 1.5: unlocking multimodal understanding
+across millions of tokens of context,'' technical report, 2024.
+
+\bibitem{claude3}
+Anthropic, ``The Claude 3 model family: Opus, Sonnet, Haiku,''
+technical report, 2024.
+
+\bibitem{llava}
+H. Liu, C. Li, Q. Wu, and Y. J. Lee, ``Visual instruction tuning,'' in
+\emph{Proc.\ NeurIPS}, 2023.
+
+\bibitem{arabic_dialect_survey}
+W. Zaghouani, ``Critical survey of the freely available Arabic corpora
+and dialect resources,'' in \emph{Proc.\ Workshop on Free/Open-Source
+Arabic Corpora and Corpora Processing Tools (LREC)}, 2014.
+
+\bibitem{arabert}
+W. Antoun, F. Baly, and H. Hajj, ``AraBERT: transformer-based model for
+Arabic language understanding,'' in \emph{Proc.\ LREC Workshop on Open-Source Arabic Corpora and Processing Tools}, 2020.
+
+\bibitem{camel_tools}
+O. Obeid et al., ``CAMeL Tools: an open source Python toolkit for
+Arabic natural language processing,'' in \emph{Proc.\ LREC}, 2020.
+
+\bibitem{arabic_asr_review}
+H. Aldarmaki, A. Ullah, S. Ram, and N. Zaki, ``Self-supervised learning
+for low-resource Arabic speech recognition: a survey,''
+\emph{Computer Speech \& Language}, vol.\ 78, 2023.
+
+\bibitem{arabic_tts_survey}
+N. Habash et al., ``A survey of Arabic text-to-speech systems,''
+\emph{Computer Speech \& Language}, vol.\ 78, 2023.
+
+\bibitem{mlkit_ar}
+Google, ``ML Kit text recognition v2 release notes,''
+\url{https://developers.google.com/ml-kit/release-notes}, accessed
+2025.
+
+\bibitem{flutter_framework}
+Google, ``Flutter: build apps for any screen,''
+\url{https://flutter.dev/}, accessed 2025.
+
+\bibitem{dart_language}
+Google, ``The Dart programming language,''
+\url{https://dart.dev/}, accessed 2025.
+
+\bibitem{talkback}
+Google, ``Get started on Android with TalkBack,''
+\url{https://support.google.com/accessibility/android/answer/6283677},
+accessed 2025.
+
+\bibitem{voiceover}
+Apple Inc., ``VoiceOver user guide for iOS,''
+\url{https://support.apple.com/guide/iphone/turn-on-and-practice-voiceover-iph3e2e415f/ios},
+accessed 2025.
+
+\bibitem{albumentations}
+A. Buslaev et al., ``Albumentations: fast and flexible image
+augmentations,'' \emph{Information}, vol.\ 11, no.\ 2, p.\ 125, 2020.
+
+\bibitem{roboflow_universe}
+Roboflow, ``Roboflow Universe: open-source computer vision dataset
+hub,'' \url{https://universe.roboflow.com/}, accessed 2025.
+
+\bibitem{khatt}
+S. A. Mahmoud et al., ``KHATT: an open Arabic offline handwritten text
+database,'' \emph{Pattern Recognition}, vol.\ 47, no.\ 3, pp.\
+1096--1112, 2014.
+
+\bibitem{coco_dataset}
+T.-Y. Lin et al., ``Microsoft COCO: common objects in context,'' in
+\emph{Proc.\ ECCV}, 2014, pp.\ 740--755.
+
+\bibitem{fddb_dataset}
+V. Jain and E. Learned-Miller, ``FDDB: a benchmark for face detection
+in unconstrained settings,'' Univ.\ Massachusetts, Amherst, Tech.\ Rep.\
+UM-CS-2010-009, 2010.
+
+\bibitem{nasa_tlx}
+S. G. Hart and L. E. Staveland, ``Development of NASA-TLX (Task Load
+Index): results of empirical and theoretical research,''
+\emph{Advances in Psychology}, vol.\ 52, pp.\ 139--183, 1988.
+
+\bibitem{nielsen_heuristics}
+J. Nielsen, ``Enhancing the explanatory power of usability heuristics,''
+in \emph{Proc.\ ACM CHI}, 1994, pp.\ 152--158.
+
+\bibitem{sus_score}
+J. Brooke, ``SUS: a retrospective,'' \emph{Journal of Usability
+Studies}, vol.\ 8, no.\ 2, pp.\ 29--40, 2013.
+
+\bibitem{bangor_sus}
+A. Bangor, P. Kortum, and J. Miller, ``Determining what individual SUS
+scores mean: adding an adjective rating scale,'' \emph{Journal of
+Usability Studies}, vol.\ 4, no.\ 3, pp.\ 114--123, 2009.
+
+\bibitem{midas_depth}
+R. Ranftl, K. Lasinger, D. Hafner, K. Schindler, and V. Koltun,
+``Towards robust monocular depth estimation: mixing datasets for
+zero-shot cross-dataset transfer,'' \emph{IEEE Trans.\ Pattern Anal.\
+Mach.\ Intell.}, vol.\ 44, no.\ 3, pp.\ 1623--1637, 2022.
+
+\bibitem{hara_navigation}
+K. Hara, S. Azenkot, M. Campbell, C. L. Bennett, V. Le, S. Pannella,
+R. Moore, K. Minckler, R. H. Ng, and J. E. Froehlich, ``Improving
+public transit accessibility for blind riders by crowdsourcing bus stop
+landmark locations with Google Street View,'' in \emph{Proc.\ ACM
+ASSETS}, 2013, pp.\ 16:1--16:8.
+
+\bibitem{privacy_edge_ml}
+Y. Mao, W. Xu, X. Wang, and Z. Wen, ``A survey on privacy-preserving
+machine learning at the edge,'' \emph{IEEE Communications Surveys \&
+Tutorials}, vol.\ 24, no.\ 2, pp.\ 1186--1216, 2022.
+
+\end{thebibliography}
+
+\end{document}
