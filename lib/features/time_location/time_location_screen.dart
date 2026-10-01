@@ -5,7 +5,12 @@ import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/constants/feature_catalog.dart';
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/feature_scaffold.dart';
+import '../../core/widgets/voice_close_listener.dart';
 
 class TimeLocationScreen extends StatefulWidget {
   const TimeLocationScreen({super.key});
@@ -30,7 +35,7 @@ class _TimeLocationScreenState extends State<TimeLocationScreen> {
   Future<void> _refreshInfo() async {
     final tts = context.read<TtsService>();
 
-    final now = DateTime.now();
+    final now = kDemoMode ? DateTime(2026, 10, 1, 10, 30) : DateTime.now();
     String dayName;
     String date;
     String time;
@@ -59,6 +64,7 @@ class _TimeLocationScreenState extends State<TimeLocationScreen> {
   }
 
   Future<String> _getLocationText() async {
+    if (kDemoMode) return 'موقعك الحالي: مدينة نصر، القاهرة، مصر';
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return 'خدمة الموقع غير مفعلة.';
 
@@ -73,9 +79,7 @@ class _TimeLocationScreenState extends State<TimeLocationScreen> {
     try {
       await setLocaleIdentifier('ar_EG');
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
 
       final places = await placemarkFromCoordinates(position.latitude, position.longitude);
@@ -85,12 +89,7 @@ class _TimeLocationScreenState extends State<TimeLocationScreen> {
 
       final p = places.first;
       // Prefer human-readable area names and avoid street-level/plus-code fragments.
-      final parts = [
-        p.subLocality,
-        p.locality,
-        p.administrativeArea,
-        p.country,
-      ]
+      final parts = [p.subLocality, p.locality, p.administrativeArea, p.country]
           .where((e) => e != null && e.trim().isNotEmpty)
           .map((e) => _sanitizePlacePart(e!.trim()))
           .where((e) => e.isNotEmpty)
@@ -119,50 +118,111 @@ class _TimeLocationScreenState extends State<TimeLocationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('الوقت والمكان')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ListView(
-          children: [
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.calendar_today),
-                title: const Text('اليوم'),
-                subtitle: Text(_dayName),
+    final feature = FeatureCatalog.byRoute(TimeLocationScreen.routeName);
+    return VoiceCloseListener(
+      child: Scaffold(
+        appBar: FeatureAppBar(feature: feature),
+        body: DecoratedBox(
+          decoration: const BoxDecoration(gradient: AppColors.backgroundGradient),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            children: [
+              Semantics(
+                liveRegion: true,
+                label: 'الساعة $_time',
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppColors.surfaceHigh, AppColors.surface],
+                    ),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.5), width: 1.5),
+                    boxShadow: [BoxShadow(color: AppColors.gold.withValues(alpha: 0.12), blurRadius: 30)],
+                  ),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'الساعة الآن  •  CURRENT TIME',
+                        style: TextStyle(
+                          color: AppColors.gold,
+                          fontSize: 12,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(_time, style: const TextStyle(fontSize: 54, fontWeight: FontWeight.w800, height: 1.1)),
+                    ],
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.event),
-                title: const Text('التاريخ'),
-                subtitle: Text(_date),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: _InfoTile(icon: Icons.today_rounded, title: 'اليوم', value: _dayName),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _InfoTile(icon: Icons.event_rounded, title: 'التاريخ', value: _date),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.access_time),
-                title: const Text('الساعة'),
-                subtitle: Text(_time),
+              const SizedBox(height: 12),
+              _InfoTile(icon: Icons.location_on_rounded, title: 'الموقع الحالي', value: _location, large: true),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: _refreshInfo,
+                icon: const Icon(Icons.refresh_rounded, size: 26),
+                label: const Text('تحديث وإعلان بالصوت'),
               ),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.location_on),
-                title: const Text('الموقع الحالي'),
-                subtitle: Text(_location),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _refreshInfo,
-              child: const Text('تحديث الآن'),
-            ),
-          ],
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _InfoTile extends StatelessWidget {
+  const _InfoTile({required this.icon, required this.title, required this.value, this.large = false});
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: AppColors.gold, size: 22),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(color: AppColors.textMuted, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(fontSize: large ? 19 : 21, fontWeight: FontWeight.w800, height: 1.4),
+          ),
+        ],
       ),
     );
   }

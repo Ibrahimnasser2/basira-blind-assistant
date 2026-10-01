@@ -2,7 +2,6 @@
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
@@ -10,8 +9,11 @@ import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class CurrencyScreen extends StatefulWidget {
   const CurrencyScreen({super.key});
@@ -26,6 +28,7 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
   Timer? _timer;
 
   bool _isRunning = false;
+  bool _busy = false;
   String _status = 'جاري تحميل نموذج العملة...';
   String _lastAnnounced = '';
 
@@ -55,6 +58,10 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
   }
 
   Future<void> _init() async {
+    if (kDemoMode) {
+      _status = 'تم تحميل النموذج. وجّه الكاميرا نحو العملة.';
+      return _startDemo();
+    }
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -184,36 +191,75 @@ class _CurrencyScreenState extends State<CurrencyScreen> {
     super.dispose();
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const ['تم التعرف على 100 جنيه مصري بنسبة 97 بالمئة'],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() {
+          _status = result;
+          _lastAnnounced = '100 EGP';
+        }),
+        analyzing: const Duration(milliseconds: 2400),
+      );
+
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('تعرف على العملة')),
-      body: Column(
-        children: [
+    return FeatureScaffold(
+      route: CurrencyScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.currency,
+      result: _status,
+      busy: _busy,
+      actionLabel: 'تحليل فوري',
+      actionIcon: Icons.document_scanner_rounded,
+      onAction: kDemoMode ? _startDemo : _runInferenceNow,
+      extra: _DenominationStrip(detected: _busy ? '' : _lastAnnounced),
+    );
+  }
+}
+
+class _DenominationStrip extends StatelessWidget {
+  const _DenominationStrip({required this.detected});
+
+  final String detected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final label in AppConstants.egpLabels)
           Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Text('الفئات المستهدفة: 5، 10، 20، 50، 100، 200 جنيه'),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: ElevatedButton(
-              onPressed: _runInferenceNow,
-              child: const Text('تحليل فوري'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: label == detected ? AppColors.success.withValues(alpha: 0.18) : AppColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: label == detected ? AppColors.success : AppColors.border,
+                    width: label == detected ? 2 : 1,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      label.split(' ').first,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: label == detected ? AppColors.success : AppColors.textPrimary,
+                      ),
+                    ),
+                    const Text('جنيه', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                  ],
+                ),
+              ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

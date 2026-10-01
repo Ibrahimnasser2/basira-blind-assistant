@@ -27,10 +27,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"basira_ai", origin, size)) {
+  if (!window.Create(L"BASIRA AI", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
+
+  // Borderless fullscreen for recording the demo video.
+  wchar_t fullscreen[8];
+  if (::GetEnvironmentVariableW(L"BASIRA_FULLSCREEN", fullscreen, 8) > 0) {
+    HWND hwnd = window.GetHandle();
+    MONITORINFO info{sizeof(MONITORINFO)};
+    ::GetMonitorInfo(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &info);
+    const RECT& r = info.rcMonitor;
+    ::SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    ::SetWindowPos(hwnd, HWND_TOPMOST, r.left, r.top, r.right - r.left,
+                   r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+  }
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

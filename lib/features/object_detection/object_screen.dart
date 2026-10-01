@@ -1,6 +1,5 @@
 ﻿import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
@@ -8,9 +7,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:translator/translator.dart';
 
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/settings_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class ObjectScreen extends StatefulWidget {
   const ObjectScreen({super.key});
@@ -26,6 +27,7 @@ class _ObjectScreenState extends State<ObjectScreen> {
   final GoogleTranslator _translator = GoogleTranslator();
   final Map<String, String> _translationCache = {};
   Timer? _timer;
+  bool _busy = false;
   String _status = 'سيبدأ اكتشاف الأشياء تلقائياً.';
   String _lastAnnouncedStatus = '';
 
@@ -46,6 +48,7 @@ class _ObjectScreenState extends State<ObjectScreen> {
   }
 
   Future<void> _init() async {
+    if (kDemoMode) return _startDemo();
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -225,32 +228,38 @@ class _ObjectScreenState extends State<ObjectScreen> {
     }
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const [
+          'تم اكتشاف حاسوب محمول، كوب، زجاجة',
+          'تم اكتشاف كرسي، طاولة، نبات',
+        ],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() => _status = result),
+      );
+
   @override
   void dispose() {
     _timer?.cancel();
-    _detector.close();
-    _labeler.close();
+    if (!kDemoMode) {
+      _detector.close();
+      _labeler.close();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('اكتشاف الأشياء')),
-      body: Column(
-        children: [
-          Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-        ],
-      ),
+    return FeatureScaffold(
+      route: ObjectScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.objects,
+      result: _status,
+      busy: _busy,
+      actionLabel: 'اكتشاف فوري',
+      actionIcon: Icons.center_focus_strong_rounded,
+      onAction: kDemoMode ? _startDemo : _detect,
     );
   }
 }

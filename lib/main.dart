@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'core/demo/demo_mode.dart';
 import 'core/services/camera_service.dart';
 import 'core/services/gemini_service.dart';
 import 'core/services/tts_service.dart';
 import 'core/services/settings_service.dart';
+import 'core/services/voice_command_service.dart';
 import 'core/theme/app_theme.dart';
+import 'demo_tour/demo_tour.dart';
 import 'features/currency_detection/currency_screen.dart';
 import 'features/face_recognition/face_screen.dart';
 import 'features/home/home_screen.dart';
@@ -23,12 +26,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = SettingsService();
   await settings.load();
-  runApp(BasiraApp(settings: settings));
+  runApp(kDemoTour ? DemoTourApp(settings: settings) : BasiraApp(settings: settings));
 }
 
 class BasiraApp extends StatelessWidget {
-  const BasiraApp({required this.settings, super.key});
+  const BasiraApp({required this.settings, this.navigatorKey, super.key});
   final SettingsService settings;
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   Widget build(BuildContext context) {
@@ -38,10 +42,15 @@ class BasiraApp extends StatelessWidget {
         Provider<TtsService>(create: (_) => TtsService(settings)),
         Provider<CameraService>(create: (_) => CameraService()),
         Provider<GeminiService>(create: (_) => GeminiService(settings)),
+        Provider<VoiceCommandService>(
+          create: (_) => VoiceCommandService(),
+          dispose: (_, voice) => voice.dispose(),
+        ),
       ],
       child: Consumer<SettingsService>(
         builder: (context, appSettings, _) {
           return MaterialApp(
+            navigatorKey: navigatorKey,
             debugShowCheckedModeBanner: false,
             title: 'BASIRA AI',
             theme: AppTheme.darkTheme,

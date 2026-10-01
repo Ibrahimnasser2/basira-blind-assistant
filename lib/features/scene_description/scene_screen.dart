@@ -1,15 +1,16 @@
 ﻿import 'dart:async';
 import 'dart:io';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/gemini_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class SceneScreen extends StatefulWidget {
   const SceneScreen({super.key});
@@ -22,6 +23,7 @@ class SceneScreen extends StatefulWidget {
 class _SceneScreenState extends State<SceneScreen> {
   Timer? _timer;
   bool _isRunning = false;
+  bool _busy = false;
   String _status = 'جاري تهيئة الكاميرا...';
   String _lastSpoken = '';
 
@@ -32,6 +34,7 @@ class _SceneScreenState extends State<SceneScreen> {
   }
 
   Future<void> _init() async {
+    if (kDemoMode) return _startDemo();
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -76,6 +79,16 @@ class _SceneScreenState extends State<SceneScreen> {
     }
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const [
+          'أمامك رصيف مشاة واسع. على يمينك مقعد خشبي، وعلى يسارك مقهى. المسار آمن.',
+          'يسير شخصان أمامك، وتوجد سيارة متوقفة على اليمين.',
+        ],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() => _status = result),
+      );
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -85,28 +98,15 @@ class _SceneScreenState extends State<SceneScreen> {
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('وصف المشهد')),
-      body: Column(
-        children: [
-          Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: ElevatedButton(
-              onPressed: _describeNow,
-              child: const Text('وصف فوري'),
-            ),
-          ),
-        ],
-      ),
+    return FeatureScaffold(
+      route: SceneScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.scene,
+      result: _status,
+      busy: _busy,
+      actionLabel: 'وصف فوري',
+      actionIcon: Icons.auto_awesome_rounded,
+      onAction: kDemoMode ? _startDemo : _describeNow,
     );
   }
 }

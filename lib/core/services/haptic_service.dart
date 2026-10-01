@@ -1,15 +1,16 @@
 import 'package:vibration/vibration.dart';
 
-class HapticService {
-  Future<void> tap() async {
-    if (await Vibration.hasVibrator()) {
-      await Vibration.vibrate(duration: 40);
-    }
-  }
+import '../demo/demo_mode.dart';
 
-  Future<void> success() async {
-    if (await Vibration.hasVibrator()) {
-      await Vibration.vibrate(pattern: [0, 60, 40, 80]);
-    }
+class HapticService {
+  Future<void> tap() => _vibrate(() => Vibration.vibrate(duration: 40));
+
+  Future<void> success() => _vibrate(() => Vibration.vibrate(pattern: [0, 60, 40, 80]));
+
+  Future<void> _vibrate(Future<void> Function() action) async {
+    if (kDemoMode) return;
+    try {
+      if (await Vibration.hasVibrator()) await action();
+    } catch (_) {}
   }
 }

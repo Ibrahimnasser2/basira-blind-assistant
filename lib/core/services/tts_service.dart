@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../demo/demo_mode.dart';
 import 'settings_service.dart';
 
 class TtsService {
@@ -37,7 +38,7 @@ class TtsService {
   }
 
   Future<void> speak(String text) async {
-    if (text.trim().isEmpty) return;
+    if (text.trim().isEmpty || kDemoMode) return;
     if (_settings.languageCode == 'en' && Platform.isAndroid) {
       final nativeSpoken = await _tryNativeEnglishSpeak(text);
       if (nativeSpoken) return;

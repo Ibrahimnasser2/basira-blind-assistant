@@ -17,6 +17,9 @@ migrate_working_dir/
 __pycache__/
 *.npy
 
+# Demo video build output
+/tool/demo_video/out/
+
 # Model training exports (only egp_currency.tflite is used by the app)
 assets/models/*.onnx
 assets/models/*.pt

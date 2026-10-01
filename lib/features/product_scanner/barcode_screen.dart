@@ -1,15 +1,16 @@
 ﻿import 'dart:async';
 import 'dart:convert';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class BarcodeScreen extends StatefulWidget {
   const BarcodeScreen({super.key});
@@ -24,9 +25,11 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
   String _status = 'جاري المسح التلقائي...';
   Timer? _scanTimer;
   bool _isScanning = false;
+  bool _busy = false;
   String? _lastCode;
 
   Future<void> _init() async {
+    if (kDemoMode) return _startDemo();
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -87,38 +90,33 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
     return (name == null || name.isEmpty) ? 'لا يوجد اسم منتج متاح.' : 'المنتج: $name';
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const ['الباركود: 2306000000503. المنتج: شوكولاتة بالبندق للدهن.'],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() => _status = result),
+        analyzing: const Duration(milliseconds: 2400),
+      );
+
   @override
   void dispose() {
     _scanTimer?.cancel();
-    _scanner.close();
+    if (!kDemoMode) _scanner.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('مسح الباركود')),
-      body: Column(
-        children: [
-          Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: ElevatedButton(
-              onPressed: _scan,
-              child: const Text('مسح فوري'),
-            ),
-          ),
-        ],
-      ),
+    return FeatureScaffold(
+      route: BarcodeScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.barcode,
+      result: _status,
+      busy: _busy,
+      actionLabel: 'مسح فوري',
+      actionIcon: Icons.qr_code_scanner_rounded,
+      onAction: kDemoMode ? _startDemo : _scan,
     );
   }
 }

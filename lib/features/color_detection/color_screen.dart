@@ -1,14 +1,16 @@
 ﻿import 'dart:async';
 import 'dart:io';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class ColorScreen extends StatefulWidget {
   const ColorScreen({super.key});
@@ -21,6 +23,7 @@ class ColorScreen extends StatefulWidget {
 class _ColorScreenState extends State<ColorScreen> {
   Timer? _timer;
   bool _isRunning = false;
+  bool _busy = false;
   String _status = 'جاري تهيئة التعرف على الألوان...';
   String _lastSpoken = '';
   Color _previewColor = Colors.black;
@@ -32,6 +35,10 @@ class _ColorScreenState extends State<ColorScreen> {
   }
 
   Future<void> _init() async {
+    if (kDemoMode) {
+      _status = 'تم تشغيل التعرف على الألوان. سيتم التحليل كل 3 ثوانٍ.';
+      return _startDemo();
+    }
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -117,6 +124,16 @@ class _ColorScreenState extends State<ColorScreen> {
     return 'أزرق';
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const ['اللون الغالب: أزرق'],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() {
+          _status = result;
+          _previewColor = const Color(0xFF2F62C9);
+        }),
+      );
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -126,35 +143,33 @@ class _ColorScreenState extends State<ColorScreen> {
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('تعرف على الألوان')),
-      body: Column(
+    return FeatureScaffold(
+      route: ColorScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.colors,
+      result: _status,
+      busy: _busy,
+      actionLabel: 'تحليل فوري',
+      actionIcon: Icons.colorize_rounded,
+      onAction: kDemoMode ? _startDemo : _detectColorNow,
+      extra: Row(
         children: [
-          Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Container(
-            width: double.infinity,
-            height: 52,
-            margin: const EdgeInsets.symmetric(horizontal: 12),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
+            width: 56,
+            height: 44,
             decoration: BoxDecoration(
               color: _previewColor,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white24),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border, width: 2),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: ElevatedButton(
-              onPressed: _detectColorNow,
-              child: const Text('تحليل فوري'),
-            ),
+          const SizedBox(width: 12),
+          const Text('عينة اللون', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Spacer(),
+          Text(
+            '#${_previewColor.toARGB32().toRadixString(16).substring(2).toUpperCase()}',
+            style: const TextStyle(color: AppColors.textMuted, fontWeight: FontWeight.w700, letterSpacing: 1),
           ),
         ],
       ),

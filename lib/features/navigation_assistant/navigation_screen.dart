@@ -1,15 +1,16 @@
 ﻿import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/demo/demo_mode.dart';
 import '../../core/services/camera_service.dart';
 import '../../core/services/haptic_service.dart';
 import '../../core/services/tts_service.dart';
+import '../../core/widgets/feature_scaffold.dart';
 
 class NavigationScreen extends StatefulWidget {
   const NavigationScreen({super.key});
@@ -26,6 +27,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   Timer? _timer;
   bool _isRunning = false;
+  bool _busy = false;
   String _status = 'جاري تهيئة مساعد السير...';
   String _lastAlert = '';
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -45,6 +47,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Future<void> _init() async {
+    if (kDemoMode) {
+      _status = 'تم تشغيل مساعد السير. سيتم الفحص تلقائياً.';
+      return _startDemo();
+    }
     final cameraService = context.read<CameraService>();
     await Permission.camera.request();
     await cameraService.initialize();
@@ -147,39 +153,40 @@ class _NavigationScreenState extends State<NavigationScreen> {
     await tts.speak(message);
   }
 
+  Future<void> _startDemo() => runDemoScript(
+        const [
+          'تحذير: يوجد سلالم أمامك. تحرك بحذر.',
+          'تحذير: يوجد حاجز على يمينك. يمكنك الاستناد إلى الدرابزين.',
+        ],
+        isMounted: () => mounted,
+        onBusy: (busy) => setState(() => _busy = busy),
+        onResult: (result) => setState(() => _status = result),
+        analyzing: const Duration(milliseconds: 1400),
+      );
+
   @override
   void dispose() {
     _timer?.cancel();
-    _objectDetector.close();
-    _imageLabeler.close();
+    if (!kDemoMode) {
+      _objectDetector.close();
+      _imageLabeler.close();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final camera = context.watch<CameraService>();
-    return Scaffold(
-      appBar: AppBar(title: const Text('مساعد السير')),
-      body: Column(
-        children: [
-          Expanded(
-            child: camera.isInitialized
-                ? CameraPreview(camera.controller!)
-                : const Center(child: CircularProgressIndicator()),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: ElevatedButton(
-              onPressed: _analyzeFrame,
-              child: const Text('فحص فوري'),
-            ),
-          ),
-        ],
-      ),
+    return FeatureScaffold(
+      route: NavigationScreen.routeName,
+      camera: camera.controller,
+      demoImage: DemoAssets.stairs,
+      result: _status,
+      busy: _busy,
+      alert: _status.startsWith('تحذير'),
+      actionLabel: 'فحص فوري',
+      actionIcon: Icons.radar_rounded,
+      onAction: kDemoMode ? _startDemo : _analyzeFrame,
     );
   }
 }
